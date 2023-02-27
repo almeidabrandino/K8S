@@ -1,0 +1,150 @@
+#Definir variaveis de RG e Cluster
+RESOURCE_GROUP=RG-AZ500
+CLUSTER_NAME=aks-az500
+
+#Criar Resource Group
+az group create --name $RESOURCE_GROUP --location eastus
+
+
+#Deploy AKS
+az aks create \
+    --resource-group $RESOURCE_GROUP \
+    --name $CLUSTER_NAME \
+    --node-count 1 \
+    --enable-addons http_application_routing \
+    --enable-managed-identity \
+    --generate-ssh-keys \
+    --node-vm-size Standard_B2s
+
+
+#Setar credenciais 
+az aks get-credentials --name $CLUSTER_NAME --resource-group $RESOURCE_GROUP
+
+#Validar nodes
+kubectl get nodes
+
+#Criar arquivo deployment.yaml
+touch deployment.yaml
+   
+##Conteudo do arquivo
+#deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: contoso-website
+spec:
+  selector: # Define the wrapping strategy
+    matchLabels: # Match all pods with the defined labels
+      app: contoso-website # Labels follow the `name: value` template
+  template: # This is the template of the pod inside the deployment
+    metadata:
+      labels:
+        app: contoso-website
+    spec:
+      containers:
+        - image: mcr.microsoft.com/mslearn/samples/contoso-website
+          name: contoso-website
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          ports:
+            - containerPort: 80
+              name: http
+
+
+
+
+#Appy deployment.yaml
+kubectl apply -f ./deployment.yaml
+
+#Validar aplicação
+kubectl get deploy contoso-website
+
+#Validar pods
+kubectl get pods
+
+#Criar arquivo service.yam
+touch service.yaml
+
+
+##Conteudo do arquivo
+#service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: contoso-website
+spec:
+  type: ClusterIP
+  selector:
+    app: contoso-website
+  ports:
+    - port: 80 # SERVICE exposed port
+      name: http # SERVICE port name
+      protocol: TCP # The protocol the SERVICE will listen to
+      targetPort: http # Port to forward to in the POD
+
+
+#Apply service.yam
+kubectl apply -f ./service.yaml
+
+#Validar serviço
+kubectl get service contoso-website
+
+
+#Get na zona de DNS
+az aks show -g $RESOURCE_GROUP -n $CLUSTER_NAME -o tsv --query addonProfiles.httpApplicationRouting.config.HTTPApplicationRoutingZoneName
+
+#Criar arquivo ingress.yaml
+touch ingress.yaml
+
+
+##Conteudo do arquivo - Adicionar conteudo do DNS na linha host
+#ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: contoso-website
+  annotations:
+    kubernetes.io/ingress.class: addon-http-application-routing
+spec:
+  rules:
+    - host: contoso.d036e1ac7f6d45e38ad5.eastus2.aksapp.io
+      http:
+        paths:
+          - backend: # How the ingress will handle the requests
+              service:
+               name: contoso-website # Which service the request will be forwarded to
+               port:
+                 name: http # Which port in that service
+            path: / # Which path is this rule referring to
+            pathType: ImplementationSpecific
+
+
+#Apply ingress.yam
+kubectl apply -f ./ingress.yaml
+
+#Validar acesso com ip publico
+kubectl get ingress contoso-website
+
+#Listar zone de DNS
+az network dns zone list --output table
+
+#Criar registro DNS apontando para ip publico do AKS
+az network dns record-set list -g mc_rg-az500_aks-az500_eastus2 -z d036e1ac7f6d45e38ad5.eastus2.aksapp.io --output table
+
+*Validar PODs
+kubectl get pods --show-labels
+
+*Scale PODs
+kubectl scale --replicas=2 deployment/
+
+*SCALE NODES
+az aks scale --resource-group RG-AZ500 --name aks-az500 --node-count 3
+
+*VALIDAR EM QUAL NODE ESTÃO OS PODS
+kubectl get pod -o=custom-columns=NODE:.spec.nodeName,POD:.metadata.name
+
